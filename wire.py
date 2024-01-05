@@ -1,13 +1,15 @@
 from typing import Dict
 import statistics
-#from scipy.stats import skew
 import csv
 import time
 import numpy as np
 import os
 
-# this one is for debug only
-TIMESTAMP_CUTOFF = 1704148887160
+from dotenv import load_dotenv
+import os
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Read environment variables from .env file
 TICK_DATA_POINTS_SZ = int(os.environ['TICK_DATA_POINTS_SZ'])
