@@ -4,18 +4,18 @@ import statistics
 import csv
 import time
 import numpy as np
+import os
 
 # this one is for debug only
 TIMESTAMP_CUTOFF = 1704148887160
 
+# Read environment variables from .env file
+TICK_DATA_POINTS_SZ = int(os.environ['TICK_DATA_POINTS_SZ'])
+LOOP_TIME_INTERVAL_SEC = int(os.environ['LOOP_TIME_INTERVAL_SEC'])
+LOG_FILE_PATH = os.environ['LOG_FILE_PATH']
 
-#constants
-TICK_DATA_POINTS_SZ = 8
-LOOP_TIME_INTERVAL_SEC = 20
 
-LOG_FILE_PATH = '/Users/ayb/mio/code/dfi/sim/examples/tickdelt.csv'
-
-def _read_last_segment(filename: str, segment_size: int = 80) -> Dict[str, Dict[int, int]]:
+def _read_last_segment(filename: str, linesToRead: int = 80) -> Dict[str, Dict[int, int]]:
     tick_data = {}
 
     with open(filename, 'r') as file:
@@ -33,10 +33,10 @@ def _read_last_segment(filename: str, segment_size: int = 80) -> Dict[str, Dict[
             if char == '\n':
                 lines.append(file.readline().strip())
                 line_count += 1
-                if line_count == segment_size:
+                if line_count == linesToRead:
                     break
 
-        # Process the lines
+        # Process the lines. OJO: tick log timestamps are in msecs
         for row in reversed(lines):
             components = row.split(',')
             if len(components) == 3:
@@ -50,9 +50,9 @@ def _read_last_segment(filename: str, segment_size: int = 80) -> Dict[str, Dict[
 
     return tick_data
 
-
-def updateMetaDic(filename: str) -> Dict[str, Dict[int, int]]:
-    # Call _read_last_segment to get the tick data
+# create tick data dict from tick log file. dict key: tkr, valu (timestamp, ticks)
+def createTickDict(filename: str) -> Dict[str, Dict[int, int]]:
+    # we only care about the last 
     tick_data = _read_last_segment(filename)
 
     # Truncate each entry to the most recent TICK_DATA_POINTS_SZ
@@ -106,16 +106,19 @@ def tickStats(tick_data):
 # https://en.wikipedia.org/wiki/Skewness#:~:text=In%20probability%20theory%20and%20statistics,zero%2C%20negative%2C%20or%20undefined.
 # also: https://www.tandfonline.com/doi/abs/10.1080/10691898.2010.11889493 
 
-def statsImpact(stats, TIMESTAMP_CUTOFF):
+def statsImpact(stats):
     impact_dict = {}
+    # logs are in milisecs so need to normalize to ms
+    now = int(time.time()*1000)
+    lastcycle = now - LOOP_TIME_INTERVAL_SEC*1000
 
     for ticker, stat_values in stats.items():
         values = list(stat_values.values())
 
         if values:
             mean_all = np.mean(values)
-
-            filtered_values = [value for timestamp, value in stat_values.items() if timestamp <= TIMESTAMP_CUTOFF]
+            # exclude newest values to measure impact
+            filtered_values = [value for timestamp, value in stat_values.items() if timestamp <= lastcycle]
             mean_filtered = np.mean(filtered_values)
             delta = 1 + (mean_all - mean_filtered) / abs(mean_filtered)
 
@@ -137,7 +140,7 @@ def printStats(tick_diff, stats_filename='stats.csv'):
             writer.writeheader()
 
         # get the stats impact needed for my skew heuristics
-        stats = statsImpact(tick_diff, TIMESTAMP_CUTOFF)
+        stats = statsImpact(tick_diff)
         for ticker, timestamp_diff_dict in tick_diff.items():
             timestamps = list(timestamp_diff_dict.keys())
             if timestamps:
@@ -161,21 +164,18 @@ def printStats(tick_diff, stats_filename='stats.csv'):
                     'min': min_diff,
                     'mean_delta': "{:.4f}".format(myskew) if myskew is not None else 'N/A'
                 }
-
                 writer.writerow(row)
-
 
 
 def main( stats_filename: str = 'stats.csv'):
     while True:
         try:
-            # 1. Update metadata
-            mkt_tick_data = updateMetaDic(LOG_FILE_PATH)
-            # 2. Calculate tick changes (old + new)
+            # deserialize tick data from file
+            mkt_tick_data = createTickDict(LOG_FILE_PATH)
+            # transform into tick changes
             tick_diff = getTickDiff(mkt_tick_data)
-
-            # get stats impact from last set of ticks
-            stats = statsImpact(tick_diff,TIMESTAMP_CUTOFF)
+            # get stats impact e.g meanDelta from last set of ticks
+            stats = statsImpact(tick_diff)
 
             # append statistics
             printStats(tick_diff, stats_filename)
